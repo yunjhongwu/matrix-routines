@@ -34,10 +34,10 @@ def RobustPCA(X, lbd=.01, nu=1, rho=1.5, tol=1e-3, maxiters=100):
         S = X_plus_Y - L
         S = np.maximum(S - lbd * nu, 0) + np.minimum(S + lbd * nu, 0)
         U, D, V = np.linalg.svd(X_plus_Y - S, full_matrices=False)
-        D = D - nu
-        rank = np.sum(D > 0)
-        rank_new = min(rank + (1 if rank < rank_new else int(0.05 * n)), n)
-        L = np.dot(U[:, :rank] * D[:rank], V[:rank, :])
+        D -= nu
+        D = D[D > 0]
+        rank_new = min(D.size + (1 if D.size < rank_new else int(0.05 * n)), n)
+        L = np.dot(U[:, :D.size] * D, V[:D.size, :])
         Res = X - L - S
         Y += (1 / nu) * Res 
         nu /= rho
