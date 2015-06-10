@@ -9,8 +9,9 @@ import numpy as np
 def RobustPCA(X, lbd=.01, nu=1, rho=1.5, tol=1e-3, maxiters=100):
     """
     Robust PCA by augmented Lagrange multiplier 
-    (Lin et al. (2010) The Augmented Lagrange Multiplier Method 
-     for Exact Recovery of Corrupted Low-Rank Matrices, arXiv:1009.5055)
+    (Lin, Z., Chen, M., & Ma, Y. (2010). The augmented lagrange multiplier 
+     method for exact recovery of corrupted low-rank matrices. 
+     arXiv preprint arXiv:1009.5055.)
      
     lbd: weight of sparse error (relative to low-rank term)
     nu: initial step size (nu = 1 / $mu$ for $mu$ in the above paper)
