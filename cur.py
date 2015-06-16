@@ -1,23 +1,29 @@
 # -*- coding: utf-8 -*-
-# Created on Fri Jun 12 16:35:39 2015
+# Created on Sun Nov 9 16:35:39 2014
 # Implemented in Python 3.4.0
 # Author: Yun-Jhong Wu
 # E-mail: yjwu@umich.edu
 
 import numpy as np
-from numpy.linalg import svd, pinv, norm
+from numpy.linalg import svd, qr, pinv, norm
 from numpy.random import uniform
+from scipy.stats import itemfreq
+
 class CUR:
     """
     Based on rCUR R package
-    Mahoney and Drineas
-    Method: 'random', 'exact', 'top', 'orthotop', 'highest'
+    Bodor, A., Csabai, I., Mahoney, M. W., & Solymosi, N. (2012). 
+      rCUR: an R package for CUR matrix decomposition. 
+      BMC bioinformatics, 13(1), 103.
     """
-    def __init__(self, k=None, 
-                 beta=4, alpha=1, weighted=True,
-                 method='random'):
-        self.k = k
-        self.weighted = weighted
+    def __init__(self, beta=None, alpha=1, method='random'):
+        """
+        beta: leverage scores are computed based on weighting 
+              of the singular values with the power of beta
+        alpha: the coefficient of orthogonality
+        method: 'random', 'exact', 'top', 'orthotop', 'highest'
+        """
+
         self.alpha = alpha
         self.beta = beta
         self.X = None
@@ -30,25 +36,36 @@ class CUR:
         else:
             self.method = method
     
-    def fit(self, X, r=None, c=None, sv=None):
-        self.k = min(self.k, min(X.shape)) if self.k else None
+    def fit(self, X, r=None, c=None, k=None, sv=None):
+        """
+        Input data X        
+        
+        X: data matrix
+        r: number of selected rows in X
+        c: number of selected columns in X
+        k: maximum of rank
+        sv: SVD given by numpy.linalg.svd
+        """
+
         self.X = X
         self.c = min(self.X.shape[1], c) if c else self.X.shape[1]
         self.r = min(self.X.shape[0], r) if r else self.X.shape[0]
 
         self.scoresC = None
         self.scoresR = None
-        self.idxC = None
-        self.idxR = None
+        self.idxC = np.zeros(0)
+        self.idxR = np.zeros(0)
 
         self.err = None
         
         if not sv:
             sv = svd(X, full_matrices=False)
-        if not self.k:
+        if not k:
             sv_cumsum = np.cumsum(sv[1])
             self.k = np.sum(sv_cumsum < sv_cumsum[-1] * 0.8)
-
+        else:
+            self.k = min(k, min(X.shape))
+            
         self.sv = (sv[0][:, :self.k], 
                    sv[1][:self.k], 
                    sv[2][:self.k, :])     
@@ -67,10 +84,10 @@ class CUR:
 
             elif self.method == 'orthotop':
                 pi = self.scoresC
-                self.idxC = np.zeros(self.c)
+                self.idxC = np.zeros(self.c, dtype=int)
                 vort = self.X.copy()
                 vnormsqr = np.sum(self.X ** 2, axis=0)
-                vortnormsqr = vnormsqr
+                vortnormsqr = vnormsqr.copy()
                 for i in range(self.c):
                     self.idxC[i] = np.argmax(pi + self.alpha * np.sqrt(vortnormsqr / vnormsqr))
                     sn = vortnormsqr[self.idxC[i]]
@@ -80,7 +97,7 @@ class CUR:
                         vortnormsqr -= delta ** 2 / sn
                         vortnormsqr[vortnormsqr < 0] = 0
                     pi[self.idxC[i]] = 0
-                
+                    
             elif self.method == 'rank':
                 v_cumsum = np.cumsum(self.sv[2] ** 2, axis=0)
                 self.scoresC = 1 / (self.X.shape[1] + 1) * np.max(v_cumsum, axis=0)- np.argmax(v_cumsum, axis=0)
@@ -103,19 +120,20 @@ class CUR:
 
             elif self.method == 'orthotop':
                 pi = self.scoresR
-                self.idxR = np.zeros(self.r)
+                self.idxR = np.zeros(self.r, dtype=int)
                 vort = self.X.copy()
                 vnormsqr = np.sum(self.X ** 2, axis=1)
-                vortnormsqr = vnormsqr
+                vortnormsqr = vnormsqr.copy()
                 for i in range(self.r):
                     self.idxR[i] = np.argmax(pi + self.alpha * np.sqrt(vortnormsqr / vnormsqr))
                     sn = vortnormsqr[self.idxR[i]]
                     if sn:
-                        delta = vort[:, self.idxR[i]].dot(vort)
-                        vort -= np.outer(vort[:, self.idxR[i]], delta) / sn
+                        delta = vort[self.idxR[i], :].dot(vort.T).T
+                        vort -= np.outer(delta, vort[self.idxR[i], :]) / sn
                         vortnormsqr -= delta ** 2 / sn
                         vortnormsqr[vortnormsqr < 0] = 0
                     pi[self.idxR[i]] = 0
+                    
                 
             elif self.method == 'rank':
                 v_cumsum = np.cumsum(self.sv[1].T ** 2, axis=0)
@@ -123,7 +141,7 @@ class CUR:
                 self.idxC = np.argpartition(self.scoresC, c)[:c]
 
         else:
-            self.idxC = np.arange(self.X.shape[1]) 
+            self.idxR = np.arange(self.X.shape[0]) 
             
         if not self.idxC.size:
             self.idxC = np.array([np.argmax(self.scoresC)])
@@ -132,40 +150,66 @@ class CUR:
             self.idxR = np.array([np.argmax(self.scoresR)])
             
     def get_levscores(self, v):
-        if self.weighted:
+        """
+        Compute leverage scores.
+        """
+        
+        if self.beta is None:
+            return np.mean(v[:self.k, :] ** 2, axis=0)
+        else:
             scores = np.sum((v[:self.k, :].T ** 2 * \
                              self.sv[1][:self.k] ** self.beta).T, 
                             axis=0)
             scores /= np.sum(scores)
             return scores
-        else:
-            return np.mean(v[:self.k, :] ** 2, axis=0)
         
-    def transform(self):
-        if self.X is not None:
-            return self.getC().dot(self.getU().dot(self.getR()))
-        else:
+    def transform(self, stable=True, rank_k=False):
+        """
+        Compute estimated X = CUR.
+        stable: do StableCUR
+        """
+        
+        if self.X is None:
             print("Run 'fit(X)' first.")
-            return 0
-    
+        else:
+            if stable:
+                Qc, _ = qr(self.getC(), 'reduced')
+                Qr, _ = qr(self.getR().T, 'reduced')
+                B = Qc.T.dot(self.X).dot(Qr)
+                if rank_k:
+                    U, _, _ = svd(B)
+                    B = U[:, :self.k].dot(U[:, :self.k].T.dot(B))
+                return Qc.dot(B).dot(Qr.T)
+            else:
+                return self.getC().dot(self.getU()).dot(self.getR())
+            
+            
     def getC(self):
-        return self.X[:, self.idxC]
+        """
+        Return C.
+        """
+        idx = itemfreq(self.idxC)
+        C = self.X[:, idx[:, 0]]
+        return C * np.sqrt(idx[:, 1])
     
     def getU(self):
-        return pinv(self.X[:, self.idxC][self.idxR, :])
+        """
+        Compute U.
+        """
+        return pinv(self.getC()).dot(self.X).dot(pinv(self.getR()))
+
 
     def getR(self):
-        return self.X[self.idxR, :]
+        """
+        Return R.
+        """
+        idx = itemfreq(self.idxR)
+        R = self.X[idx[:, 0], :]
 
-    def getError(self):
-        return norm(self.X - self.transform()) / norm(self.X)
-        
-cur = CUR(method='exactnum')  
-#np.random.seed(1)
-#X = np.random.normal(0, 1, (50, 10)).dot(np.random.normal(0, 1, (10, 100)))
-X = np.loadtxt("X")
-C = X[:, :10]
-R = X[:5, :]
-cur.fit(X, r=5, c=20)
-print(norm(X - C.dot(pinv(X[:5,:][:,:10]).dot(R))) / norm(X))
-print(cur.getError())
+        return (R.T * np.sqrt(idx[:, 1])).T 
+
+    def getError(self, stable=True, rank_k=False):
+        """
+        Return relative error of estimated X
+        """
+        return norm(self.X - self.transform(stable, rank_k)) / norm(self.X)
